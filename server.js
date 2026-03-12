@@ -11,37 +11,27 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Set up multer for file uploads
+// -----------------------------
+// Middleware
+// -----------------------------
+
 const upload = multer({ dest: "uploads/" });
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static assets (if you have a /public folder)
-app.use(express.static(path.join(__dirname, "public")));
+// Serve built frontend (Vite dist folder)
+app.use(express.static(path.join(__dirname, "dist")));
 
-/**
- * Serve the main UI (views/index.html)
- * This works whether views/ is at repo root or under src/views
- */
+// Serve main UI
 app.get("/", (req, res) => {
-  const p1 = path.join(process.cwd(), "views", "index.html");
-  const p2 = path.join(process.cwd(), "src", "views", "index.html");
-
-  const filePath = fs.existsSync(p1) ? p1 : p2;
-
-  if (!fs.existsSync(filePath)) {
-    return res
-      .status(500)
-      .send(
-        "UI file not found. Expected views/index.html (or src/views/index.html)."
-      );
-  }
-
-  res.sendFile(filePath);
+  res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
-// Helper to escape CSV fields
+// -----------------------------
+// Helper: Escape CSV fields
+// -----------------------------
+
 function escapeCSV(field) {
   if (field === null || field === undefined) return "";
   const str = String(field);
@@ -51,12 +41,14 @@ function escapeCSV(field) {
   return str;
 }
 
-// Audit endpoint
+// -----------------------------
+// Audit Endpoint
+// -----------------------------
+
 app.post("/api/audit", upload.single("urlFile"), async (req, res) => {
   try {
     let urls = [];
 
-    // Parse URLs from textarea
     if (req.body.urls) {
       const textUrls = req.body.urls
         .split("\n")
@@ -65,7 +57,6 @@ app.post("/api/audit", upload.single("urlFile"), async (req, res) => {
       urls.push(...textUrls);
     }
 
-    // Parse URLs from uploaded file
     if (req.file) {
       const fileContent = fs.readFileSync(req.file.path, "utf-8");
       const fileUrls = fileContent
@@ -73,12 +64,9 @@ app.post("/api/audit", upload.single("urlFile"), async (req, res) => {
         .map((u) => u.trim())
         .filter(Boolean);
       urls.push(...fileUrls);
-
-      // Clean up uploaded file
       fs.unlinkSync(req.file.path);
     }
 
-    // Deduplicate
     urls = [...new Set(urls)];
 
     if (urls.length === 0) {
@@ -88,7 +76,6 @@ app.post("/api/audit", upload.single("urlFile"), async (req, res) => {
     const matchPattern = req.body.matchPattern || "/us/en";
     const results = [];
 
-    // Launch Playwright (Render-safe)
     const browser = await chromium.launch({
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
@@ -117,11 +104,8 @@ app.post("/api/audit", upload.single("urlFile"), async (req, res) => {
 
           for (const a of links) {
             const href = a.getAttribute("href");
-            if (!href) continue;
-            if (!href.includes(pattern)) continue;
-            if (seenHrefs.has(href)) continue;
+            if (!href || !href.includes(pattern) || seenHrefs.has(href)) continue;
 
-            // Ignore links inside language/locale selectors
             const langSelector =
               'header, [aria-label*="lang" i], [aria-label*="language" i], [aria-label*="locale" i], [class*="lang" i], [class*="language" i], [class*="locale" i], [id*="lang" i], [id*="language" i], [id*="locale" i]';
             if (a.closest(langSelector)) continue;
@@ -132,18 +116,23 @@ app.post("/api/audit", upload.single("urlFile"), async (req, res) => {
             if (!linkText) linkText = (a.getAttribute("aria-label") || "").trim();
             if (!linkText) linkText = (a.getAttribute("title") || "").trim();
 
-            const container = a.closest("section, article, nav, header, footer, main, div");
+            const container = a.closest(
+              "section, article, nav, header, footer, main, div"
+            );
+
             let surroundingText = "";
             if (container) {
-              surroundingText = (container.innerText || "").trim().substring(0, 200);
+              surroundingText = (container.innerText || "")
+                .trim()
+                .substring(0, 200);
             }
 
-            const lowerSurrounding = surroundingText.toLowerCase();
+            const lower = surroundingText.toLowerCase();
             if (
-              lowerSurrounding.includes("choisissez la langue") ||
-              lowerSurrounding.includes("canada - français") ||
-              lowerSurrounding.includes("select language") ||
-              lowerSurrounding.includes("language")
+              lower.includes("choisissez la langue") ||
+              lower.includes("canada - français") ||
+              lower.includes("select language") ||
+              lower.includes("language")
             ) {
               continue;
             }
@@ -193,7 +182,10 @@ app.post("/api/audit", upload.single("urlFile"), async (req, res) => {
   }
 });
 
-// CSV Download endpoint
+// -----------------------------
+// CSV Download
+// -----------------------------
+
 app.post("/api/download-csv", (req, res) => {
   try {
     const { results } = req.body;
@@ -203,9 +195,14 @@ app.post("/api/download-csv", (req, res) => {
     }
 
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", 'attachment; filename="audit_results.csv"');
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="audit_results.csv"'
+    );
 
-    res.write("page_url,matched_link,link_text,surrounding_text,error\n");
+    res.write(
+      "page_url,matched_link,link_text,surrounding_text,error\n"
+    );
 
     for (const row of results) {
       const csvRow = [
@@ -225,6 +222,8 @@ app.post("/api/download-csv", (req, res) => {
     res.status(500).send("Error generating CSV");
   }
 });
+
+// -----------------------------
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
